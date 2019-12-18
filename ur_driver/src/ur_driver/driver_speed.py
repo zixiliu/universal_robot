@@ -47,7 +47,6 @@ joint_offsets = {}
 PORT=30002       # 10 Hz, RobotState 
 RT_PORT=30003    #125 Hz, RobotStateRT
 DEFAULT_REVERSE_PORT = 50001     #125 Hz, custom data (from prog)
-DEFAULT_DRIVER = 'trajectory'
 
 MSG_OUT = 1
 MSG_QUIT = 2
@@ -657,7 +656,7 @@ class URTrajectoryFollower(object):
         self.following_lock = threading.Lock()
         self.T0 = time.time()
         self.robot = robot
-        self.server = actionlib.ActionServer("follow_trajectory",
+        self.server = actionlib.ActionServer("follow_joint_trajectory",
                                              FollowJointTrajectoryAction,
                                              self.on_goal, self.on_cancel, auto_start=False)
 
@@ -847,7 +846,7 @@ class URSpeedFollower(object):
         self.following_lock = threading.Lock()
         self.T0 = time.time()
         self.robot = robot
-        self.server = actionlib.ActionServer("follow_trajectory",
+        self.server = actionlib.ActionServer("follow_speed_trajectory",
                                              FollowJointTrajectoryAction,
                                              self.on_goal, self.on_cancel, auto_start=False)
 
@@ -949,7 +948,7 @@ class URSpeedFollower(object):
         print "left over trajectory", self.goal_handle.get_goal().trajectory
 
     last_now = time.time()
-    UNIT_DISTANCE = np.array([0.01,0.01,0.01,0.08,0.08,0.08])*0.8
+    UNIT_DISTANCE = np.array([0.01,0.01,0.01,0.1,0.1,0.1])*0.8
     def _update(self, event):
         if not self.goal_handle:
             new_joints = self.robot.get_joint_states().position
@@ -1049,20 +1048,11 @@ def main():
     elif len(args) == 1:
         robot_hostname = args[0]
         reverse_port = DEFAULT_REVERSE_PORT
-        driver_type = DEFAULT_DRIVER
     elif len(args) == 2:
         robot_hostname = args[0]
         reverse_port = int(args[1])
         if not (0 <= reverse_port <= 65535):
                 parser.error("You entered an invalid port number")
-        driver_type = DEFAULT_DRIVER
-    elif len(args) == 3:
-        robot_hostname = args[0]
-        reverse_port = int(args[1])
-        if not (0 <= reverse_port <= 65535):
-                parser.error("You entered an invalid port number")
-        driver_type = args[2]
-        print "driver_type", driver_type, type(driver_type)
     else:
         parser.error("Wrong number of parameters")
 
@@ -1156,13 +1146,8 @@ def main():
                 
                 if action_server:
                     action_server.set_robot(r)
-                else:
-                    if driver_type == "velocity":                    
-                        print "starting velocity driver"
-                        action_server = URSpeedFollower(r, rospy.Duration(1.0))
-                    else:   # default
-                        print "starting trajectory driver"
-                        action_server = URTrajectoryFollower(r, rospy.Duration(1.0))
+                else:                    
+                    action_server = URSpeedFollower(r, rospy.Duration(1.0))
                     action_server.start()
     except KeyboardInterrupt:
         try:

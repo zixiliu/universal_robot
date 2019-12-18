@@ -8,11 +8,6 @@ import struct
 import traceback, code
 import optparse
 import SocketServer
-import numpy as np
-
-import pdb
-from hbl_ur5.kin_helpers import *
-from tf import transformations as tfn
 
 import rospy
 import actionlib
@@ -47,7 +42,6 @@ joint_offsets = {}
 PORT=30002       # 10 Hz, RobotState 
 RT_PORT=30003    #125 Hz, RobotStateRT
 DEFAULT_REVERSE_PORT = 50001     #125 Hz, custom data (from prog)
-DEFAULT_DRIVER = 'trajectory'
 
 MSG_OUT = 1
 MSG_QUIT = 2
@@ -657,7 +651,7 @@ class URTrajectoryFollower(object):
         self.following_lock = threading.Lock()
         self.T0 = time.time()
         self.robot = robot
-        self.server = actionlib.ActionServer("follow_trajectory",
+        self.server = actionlib.ActionServer("follow_joint_trajectory",
                                              FollowJointTrajectoryAction,
                                              self.on_goal, self.on_cancel, auto_start=False)
 
@@ -837,140 +831,6 @@ class URTrajectoryFollower(object):
                     #    self.goal_handle = None
 
 
-
-
-class URSpeedFollower(object):
-    RATE = 0.05      # the frequency it add more points (i.e. should be the time it takes to move the small amount of offset
-    def __init__(self, robot, goal_time_tolerance=None):
-        self.goal_time_tolerance = goal_time_tolerance or rospy.Duration(0.0)
-        self.joint_goal_tolerances = [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
-        self.following_lock = threading.Lock()
-        self.T0 = time.time()
-        self.robot = robot
-        self.server = actionlib.ActionServer("follow_trajectory",
-                                             FollowJointTrajectoryAction,
-                                             self.on_goal, self.on_cancel, auto_start=False)
-
-        self.goal_handle = None
-        self.traj = None
-        self.traj_t0 = 0.0
-        self.first_waypoint_id = 10
-        self.last_point_sent = True
-
-        self.update_timer = rospy.Timer(rospy.Duration(self.RATE), self._update)
-        print "Running URSpeedFollower"
-
-    def set_robot(self, robot):
-        # Cancels any goals in progress
-        if self.goal_handle:
-            self.goal_handle.set_canceled()
-            self.goal_handle = None
-        self.traj = None
-        self.robot = robot
-        if self.robot:
-            self.init_traj_from_robot()
-
-    # Sets the trajectory to remain stationary at the current position
-    # of the robot.
-    def init_traj_from_robot(self):
-        if not self.robot: raise Exception("No robot connected")
-        # Busy wait (avoids another mutex)
-        state = self.robot.get_joint_states()
-        while not state:
-            time.sleep(0.1)
-            state = self.robot.get_joint_states()
-        self.traj_t0 = time.time()
-        self.traj = JointTrajectory()
-        self.traj.joint_names = joint_names
-        self.traj.points = [JointTrajectoryPoint(
-            positions = [0] * 6,
-            velocities = [0] * 6,
-            accelerations = [0] * 6,
-            time_from_start = rospy.Duration(0.0))]
-
-    def start(self):
-        self.init_traj_from_robot()
-        self.server.start()
-        print "The action server for this driver has been started"
-
-    def on_goal(self, goal_handle):
-        log("on_goal")
-
-        # Checks that the robot is connected
-        if not self.robot:
-            rospy.logerr("Received a goal, but the robot is not connected")
-            goal_handle.set_rejected()
-            return
-
-        # Checks if the joints are just incorrect
-        if set(goal_handle.get_goal().trajectory.joint_names) != set(joint_names):
-            rospy.logerr("Received a goal with incorrect joint names: (%s)" % \
-                         ', '.join(goal_handle.get_goal().trajectory.joint_names))
-            goal_handle.set_rejected()
-            return
-
-        if not traj_is_finite(goal_handle.get_goal().trajectory):
-            rospy.logerr("Received a goal with infinites or NaNs")
-            goal_handle.set_rejected(text="Received a goal with infinites or NaNs")
-            return
-        
-        # Checks that the trajectory has velocities
-        if not has_velocities(goal_handle.get_goal().trajectory):
-            rospy.logerr("Received a goal without velocities")
-            goal_handle.set_rejected(text="Received a goal without velocities")
-            return
-
-        # Checks that the velocities are withing the specified limits
-        if not has_limited_velocities(goal_handle.get_goal().trajectory):
-            message = "Received a goal with velocities that are higher than %f" % max_velocity
-            rospy.logerr(message)
-            goal_handle.set_rejected(text=message)
-            return
-
-        # Orders the joints of the trajectory according to joint_names
-        reorder_traj_joints(goal_handle.get_goal().trajectory, joint_names)
-                
-        with self.following_lock:
-            now = time.time()
-            self.set_robot(self.robot)
-            self.traj_t0 = now
-            self.goal_handle = goal_handle
-            self.traj = goal_handle.get_goal().trajectory
-            self.goal_handle.set_accepted()
-
-    def on_cancel(self, goal_handle):
-        log("on_cancel")
-        if goal_handle == self.goal_handle:
-            with self.following_lock:
-                self.set_robot(self.robot)
-                print "resetting robot due to on_cancel"
-        else:
-            goal_handle.set_canceled()
-        print "left over trajectory", self.goal_handle.get_goal().trajectory
-
-    last_now = time.time()
-    UNIT_DISTANCE = np.array([0.01,0.01,0.01,0.08,0.08,0.08])*0.8
-    def _update(self, event):
-        if not self.goal_handle:
-            new_joints = self.robot.get_joint_states().position
-
-        elif self.robot and self.traj:
-            delta_pose = np.array(self.traj.points[-1].positions)*self.UNIT_DISTANCE
-            now_joints = self.robot.get_joint_states().position
-            now_pose = unpack_pose(fk_solver(now_joints))
-            new_orientation = tfn.quaternion_multiply(now_pose[3:7],tfn.quaternion_from_euler(delta_pose[3],delta_pose[4],delta_pose[5]))
-            new_position = now_pose[0:3]+delta_pose[0:3]
-            new_pose = np.concatenate([new_position,new_orientation])
-            # check range here  
-            new_joints = ik_best(pack_pose(new_pose),now_joints)
-
-        try:
-            self.robot.send_servoj(999, new_joints, self.RATE)
-        except socket.error:
-            pass
-
-
-
 # joint_names: list of joints
 #
 # returns: { "joint_name" : joint_offset }
@@ -1049,20 +909,11 @@ def main():
     elif len(args) == 1:
         robot_hostname = args[0]
         reverse_port = DEFAULT_REVERSE_PORT
-        driver_type = DEFAULT_DRIVER
     elif len(args) == 2:
         robot_hostname = args[0]
         reverse_port = int(args[1])
         if not (0 <= reverse_port <= 65535):
                 parser.error("You entered an invalid port number")
-        driver_type = DEFAULT_DRIVER
-    elif len(args) == 3:
-        robot_hostname = args[0]
-        reverse_port = int(args[1])
-        if not (0 <= reverse_port <= 65535):
-                parser.error("You entered an invalid port number")
-        driver_type = args[2]
-        print "driver_type", driver_type, type(driver_type)
     else:
         parser.error("Wrong number of parameters")
 
@@ -1157,13 +1008,9 @@ def main():
                 if action_server:
                     action_server.set_robot(r)
                 else:
-                    if driver_type == "velocity":                    
-                        print "starting velocity driver"
-                        action_server = URSpeedFollower(r, rospy.Duration(1.0))
-                    else:   # default
-                        print "starting trajectory driver"
-                        action_server = URTrajectoryFollower(r, rospy.Duration(1.0))
+                    action_server = URTrajectoryFollower(r, rospy.Duration(1.0))
                     action_server.start()
+
     except KeyboardInterrupt:
         try:
             r = getConnectedRobot(wait=False)

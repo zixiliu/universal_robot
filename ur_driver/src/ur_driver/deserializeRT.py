@@ -11,6 +11,8 @@ class RobotStateRT(object):
             return RobotStateRT_V15.unpack(buf)        
         elif plen == 812:
             return RobotStateRT_V18.unpack(buf)
+        elif plen == 764:                   # added to accommodate downgraded 1.7.10857
+            return RobotStateRT_V18.unpack(buf)
         elif plen == 1044:
             return RobotStateRT_V30.unpack(buf)
         else:
@@ -238,10 +240,11 @@ class RobotStateRT_V18(object):
         rs.robot_mode = struct.unpack_from("!d",buf, offset)[0]
         offset+=8
         
-        #joint_mode: 6x double (6x 8byte)
-        all_values = list(struct.unpack_from("!dddddd",buf, offset))
-        offset+=6*8
-        rs.joint_modes = copy.deepcopy(all_values)
+        ## commented out to accommodate controller version 1.7.10857
+#        #joint_mode: 6x double (6x 8byte)
+#        all_values = list(struct.unpack_from("!dddddd",buf, offset))
+#        offset+=6*8
+#        rs.joint_modes = copy.deepcopy(all_values)
 
         return rs
 
